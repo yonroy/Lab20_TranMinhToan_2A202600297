@@ -145,7 +145,35 @@ def benchmark(
 
     with open(config, encoding="utf-8") as f:
         data = json.load(f)
-        questions = [q["query"] for q in data.get("questions", []) if not q.get("expect_blocked")]
+        all_questions = data.get("questions", [])
+        questions = [q["query"] for q in all_questions if not q.get("expect_blocked")]
+        blocked_questions = [q["query"] for q in all_questions if q.get("expect_blocked")]
+
+    # --- Test guardrail for blocked queries and write logs ---
+    if blocked_questions:
+        console.print(f"[bold red]Testing guardrail for {len(blocked_questions)} blocked queries...[/bold red]")
+        guardrail_writer = TraceWriter("benchmark_guardrail")
+        for bq in blocked_questions:
+            blocked = False
+            for pattern in _BLOCKED_PATTERNS:
+                if pattern.search(bq):
+                    blocked = True
+                    break
+            status = "BLOCKED" if blocked else "PASSED (unexpected)"
+            console.print(f"  [dim]Guardrail [{status}]:[/dim] {bq[:80]}")
+
+            # Write a trace log for the guardrail result
+            request = ResearchQuery(query=bq)
+            state = ResearchState(request=request)
+            state.final_answer = f"[Guardrail] Query was {status}."
+            state.agent_results.append(AgentResult(
+                agent=AgentName.RESEARCHER,
+                content=f"Guardrail check: {status}",
+                metadata={"expect_blocked": True, "was_blocked": blocked},
+            ))
+            log_path = guardrail_writer.write_trace(state)
+            console.print(f"  [dim]Trace → {log_path}[/dim]")
+        console.print()
 
     console.print(f"[bold blue]Starting Benchmark for {len(questions)} queries...[/bold blue]\n")
 
